@@ -1,27 +1,14 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.9;
+pragma solidity ^0.8.21;
 
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
-import "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
-import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
-import "@openzeppelin/contracts/security/Pausable.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/token/ERC721/extensions/ERC721Burnable.sol";
 import "@openzeppelin/contracts/utils/Counters.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
-contract CasaNFT is
-    ERC721,
-    ERC721Enumerable,
-    ERC721URIStorage,
-    Pausable,
-    Ownable,
-    ERC721Burnable,
-    ReentrancyGuard
-{
+contract CasaNFT is ERC721 {
     using Counters for Counters.Counter;
-
     Counters.Counter private _tokenIdCounter;
+
+    address public goon;
 
     struct Casa {
         string direccion;
@@ -36,20 +23,19 @@ contract CasaNFT is
     }
 
     struct DatosVenta {
-        bool enAlquiler;
         bool enVenta;
         uint256 tiempoMinimoAlquiler;
         uint256 tiempoMaximoAlquiler;
         uint256 fechaInicioAlquiler;
         uint256 fechaFinAlquiler;
     }
+
     uint256 public tasaPropietario = 1 ether;
     string public baseURI = "https://setBaseURIhere/";
 
     mapping(uint256 => Casa) private _casas;
     mapping(address => bool) private _propietarios;
 
-    // Este modificador de acceso solo permite que el propietario acceda a una función.
     modifier onlyPropietario() {
         require(
             _propietarios[msg.sender],
@@ -57,42 +43,35 @@ contract CasaNFT is
         );
         _;
     }
-    // Este modificador de acceso solo permite que el propietario de un token acceda a una función.
-    modifier isPropietarioOf(uint256 tokenId) {
-        require(_exists(tokenId), "Token ID no existe");
+
+    modifier onlyTokenOwner(uint256 tokenId) {
         require(
             ownerOf(tokenId) == msg.sender,
-            "Solo el propietario puede realizar esta operacion"
-        );
-        _;
-    }
-    // Este modificador se asegura de que la casa con el ID especificado esté en alquiler antes de permitir el acceso a la función.
-    modifier enAlquiler(uint256 _id) {
-        require(
-            _casas[_id].datosVenta.enAlquiler,
-            "La casa no esta en alquiler"
+            "Solo el propietario del tokenId puede realizar esta operacion"
         );
         _;
     }
 
-    constructor() ERC721("CasaNFT", "CASA") {}
+    modifier onlyGoon() {
+        require(msg.sender == goon, "Solo el pro");
+        _;
+    }
 
-    // La función agregarPropietario permite agregar una nueva dirección de propietario a
-    function agregarPropietario() public payable nonReentrant {
-        require(msg.value == tasaPropietario, "El pago debe ser correcto");
+    constructor() ERC721("CasaNFT", "CASA") {
+        goon = msg.sender;
+    }
+
+    function agregarPropietario(address propietario) public payable {
+        require(msg.value >= tasaPropietario, "El pago es insuficiente");
         require(
-            msg.sender != address(0),
-            "La direccion del nuevo propietario no puede ser 0x0."
+            !_propietarios[propietario],
+            "El propietario ya esta registrado"
         );
-        require(!_propietarios[msg.sender], "El propietario ya existe.");
-        _propietarios[msg.sender] = true;
+        require(propietario != address(0), "La direccion no puede ser 0x0");
+
+        _propietarios[propietario] = true;
     }
 
-    function setTasaPropietario(uint256 newTasa) public onlyOwner {
-        tasaPropietario = newTasa;
-    }
-
-    // Función para crear una nueva casa con los datos proporcionados y asignar un token ID
     function crearCasa(
         string memory direccion,
         uint256 precio,
@@ -103,10 +82,26 @@ contract CasaNFT is
         string memory imagenURI,
         DatosVenta memory datosVenta
     ) public onlyPropietario returns (uint256) {
-        _tokenIdCounter.increment();
+        require(
+            bytes(direccion).length > 0,
+            "La direccion no puede estar vacia"
+        );
+        require(precio > 0, "El precio debe ser mayor que 0");
+        require(area > 0, "El area debe ser mayor que 0");
+        require(habitaciones > 0, "Debe tener al menos una habitacion");
+        require(banos > 0, "Debe tener al menos un banno");
+        require(
+            bytes(descripcion).length > 0,
+            "La descripcion no puede estar vacia"
+        );
+        require(
+            bytes(imagenURI).length > 0,
+            "El URI de la imagen no puede estar vacio"
+        );
 
+        _tokenIdCounter.increment();
         uint256 nuevoTokenId = _tokenIdCounter.current();
-        // Se guarda la información de la casa en un mapping con el nuevo Token ID
+
         _casas[nuevoTokenId] = Casa(
             direccion,
             precio,
@@ -118,89 +113,73 @@ contract CasaNFT is
             msg.sender,
             datosVenta
         );
-        // Se emite el evento de creación de la casa y se asigna el token ID al propietario
-        _safeMint(msg.sender, nuevoTokenId);
-        _setTokenURI(nuevoTokenId, _baseURI());
 
+        _safeMint(msg.sender, nuevoTokenId);
         return nuevoTokenId;
     }
 
-    // Función para obtener los datos de una casa a partir de su token ID
     function getCasa(uint256 tokenId) public view returns (Casa memory) {
-        require(_exists(tokenId), "Token ID no existe");
         return _casas[tokenId];
     }
 
-    // Función que devuelve un valor booleano indicando si la casa está en alquiler.
-    function isEnAlquiler(uint256 _id)
-        public
-        view
-        enAlquiler(_id)
-        returns (bool)
-    {
-        return _casas[_id].datosVenta.enAlquiler;
+    function estaEnAlquiler(uint256 tokenId) public view returns (bool) {
+        Casa memory casa = _casas[tokenId];
+        return (block.timestamp >= casa.datosVenta.fechaInicioAlquiler &&
+            block.timestamp <= casa.datosVenta.fechaFinAlquiler);
     }
 
-    // Funciones para actualizar los datos de una casa a partir de su token ID
     function setDireccion(uint256 tokenId, string memory direccion)
         public
-        isPropietarioOf(tokenId)
+        onlyTokenOwner(tokenId)
     {
         _casas[tokenId].direccion = direccion;
     }
 
     function setPrecio(uint256 tokenId, uint256 precio)
         public
-        isPropietarioOf(tokenId)
+        onlyTokenOwner(tokenId)
     {
         _casas[tokenId].precio = precio;
     }
 
     function setArea(uint256 tokenId, uint256 area)
         public
-        isPropietarioOf(tokenId)
+        onlyTokenOwner(tokenId)
     {
         _casas[tokenId].area = area;
     }
 
     function setHabitaciones(uint256 tokenId, uint256 nuevasHabitaciones)
         public
-        isPropietarioOf(tokenId)
+        onlyTokenOwner(tokenId)
     {
         _casas[tokenId].habitaciones = nuevasHabitaciones;
     }
 
     function setBanos(uint256 tokenId, uint256 nuevosBanos)
         public
-        isPropietarioOf(tokenId)
+        onlyTokenOwner(tokenId)
     {
         _casas[tokenId].banos = nuevosBanos;
     }
 
     function setDescripcion(uint256 tokenId, string memory nuevaDescripcion)
         public
-        isPropietarioOf(tokenId)
+        onlyTokenOwner(tokenId)
     {
         _casas[tokenId].descripcion = nuevaDescripcion;
     }
 
     function setImagenURI(uint256 tokenId, string memory nuevaImagenURI)
         public
-        isPropietarioOf(tokenId)
+        onlyTokenOwner(tokenId)
     {
         _casas[tokenId].imagenURI = nuevaImagenURI;
     }
 
-    function setEnAlquiler(uint256 tokenId, bool alqui)
-        public
-        isPropietarioOf(tokenId)
-    {
-        _casas[tokenId].datosVenta.enAlquiler = alqui;
-    }
-
     function setEnVenta(uint256 tokenId, bool enVenta)
         public
-        isPropietarioOf(tokenId)
+        onlyTokenOwner(tokenId)
     {
         _casas[tokenId].datosVenta.enVenta = enVenta;
     }
@@ -208,83 +187,44 @@ contract CasaNFT is
     function setTiempoMinimoAlquiler(
         uint256 tokenId,
         uint256 tiempoMinimoAlquiler
-    ) public isPropietarioOf(tokenId) {
+    ) public onlyTokenOwner(tokenId) {
         _casas[tokenId].datosVenta.tiempoMinimoAlquiler = tiempoMinimoAlquiler;
     }
 
     function setTiempoMaximoAlquiler(
         uint256 tokenId,
         uint256 tiempoMaximoAlquiler
-    ) public isPropietarioOf(tokenId) {
+    ) public onlyTokenOwner(tokenId) {
         _casas[tokenId].datosVenta.tiempoMaximoAlquiler = tiempoMaximoAlquiler;
     }
 
     function setFechaInicioAlquiler(
         uint256 tokenId,
         uint256 fechaInicioAlquiler
-    ) public isPropietarioOf(tokenId) {
+    ) public onlyTokenOwner(tokenId) {
         _casas[tokenId].datosVenta.fechaInicioAlquiler = fechaInicioAlquiler;
     }
 
     function setFechaFinAlquiler(uint256 tokenId, uint256 fechaFinAlquiler)
         public
-        isPropietarioOf(tokenId)
+        onlyTokenOwner(tokenId)
     {
         _casas[tokenId].datosVenta.fechaFinAlquiler = fechaFinAlquiler;
     }
 
-    function transferirSaldo(address payable _destinatario) public onlyOwner {
+    function quemarToken(uint256 tokenId)
+        public
+        onlyTokenOwner(tokenId)
+        onlyGoon
+    {
+        _burn(tokenId);
+    }
+
+    function transferirSaldo(address payable _destinatario) public onlyGoon {
         _destinatario.transfer(address(this).balance);
     }
 
-    function _baseURI() internal view override returns (string memory) {
-        return baseURI;
-    }
-
-    function setBaseURI(string memory newURI) public onlyOwner {
+    function setBaseURI(string memory newURI) public onlyGoon {
         baseURI = newURI;
-    }
-
-    function pause() public onlyOwner {
-        _pause();
-    }
-
-    function unpause() public onlyOwner {
-        _unpause();
-    }
-
-    function _beforeTokenTransfer(
-        address from,
-        address to,
-        uint256 tokenId,
-        uint256 batchSize
-    ) internal override(ERC721, ERC721Enumerable) whenNotPaused {
-        super._beforeTokenTransfer(from, to, tokenId, batchSize);
-    }
-
-    // The following functions are overrides required by Solidity.
-    function _burn(uint256 tokenId)
-        internal
-        override(ERC721, ERC721URIStorage)
-    {
-        super._burn(tokenId);
-    }
-
-    function tokenURI(uint256 tokenId)
-        public
-        view
-        override(ERC721, ERC721URIStorage)
-        returns (string memory)
-    {
-        return super.tokenURI(tokenId);
-    }
-
-    function supportsInterface(bytes4 interfaceId)
-        public
-        view
-        override(ERC721, ERC721Enumerable)
-        returns (bool)
-    {
-        return super.supportsInterface(interfaceId);
     }
 }
